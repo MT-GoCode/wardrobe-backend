@@ -1,0 +1,4 @@
+uv venv
+.venv\Scripts\activate
+cd backend
+uv pip install -r requirements.txt

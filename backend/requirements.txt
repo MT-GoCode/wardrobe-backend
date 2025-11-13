@@ -1,0 +1,8 @@
+flask
+flask-cors
+python-dotenv
+werkzeug
+replicate
+supabase
+pillow
+requests

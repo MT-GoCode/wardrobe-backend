@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload Images</title>
+    <style>
+        #results {
+            margin-top: 20px;
+        }
+        .result-image {
+            max-width: 300px;
+            margin: 10px;
+            border: 2px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload Images</h1>
+
+    <form id="uploadForm">
+        <div>
+            <label>Person Image:</label><br>
+            <input type="file" id="personImage" accept="image/*" required>
+        </div>
+        <br>
+        <div>
+            <label>Clothing Images:</label><br>
+            <input type="file" id="clothingImages" accept="image/*" multiple required>
+        </div>
+        <br>
+        <button type="submit">Upload</button>
+    </form>
+
+    <div id="message"></div>
+    <div id="results"></div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData();
+            const personImage = document.getElementById('personImage').files[0];
+            const clothingImages = document.getElementById('clothingImages').files;
+
+            formData.append('person_image', personImage);
+            for (let i = 0; i < clothingImages.length; i++) {
+                formData.append('clothing_images', clothingImages[i]);
+            }
+
+            document.getElementById('message').textContent = 'Processing...';
+            document.getElementById('results').innerHTML = '';
+
+            try {
+                const response = await fetch('http://localhost:5000/generate_request', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    document.getElementById('message').textContent = 'Success!';
+
+                    const resultsDiv = document.getElementById('results');
+                    resultsDiv.innerHTML = '<h2>Final Images:</h2>';
+
+                    if (data.final_images && data.final_images.length > 0) {
+                        data.final_images.forEach((img, i) => {
+                            const imgElem = document.createElement('img');
+                            imgElem.src = img.url;
+                            imgElem.className = 'result-image';
+                            imgElem.alt = `Result ${i + 1}`;
+                            resultsDiv.appendChild(imgElem);
+                        });
+                    } else {
+                        resultsDiv.innerHTML += '<p>No images returned</p>';
+                    }
+                } else {
+                    document.getElementById('message').textContent = 'Error: ' + data.error;
+                }
+            } catch (error) {
+                document.getElementById('message').textContent = 'Error: ' + error.message;
+            }
+        });
+    </script>
+</body>
+</html>

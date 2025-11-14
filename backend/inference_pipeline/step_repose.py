@@ -4,7 +4,7 @@ from ai_api_utils.wavespeed import create_prediction, poll_prediction
 
 
 def repose_single(bgr_image_url, setting, gender):
-    prompt = f"The {gender} has pose {setting['pose']}, with exact same face, exact same facial identity, exact same clothing, exact same details, correct body structure"
+    prompt = f"The {gender} has pose {setting['pose']}, with exact same face, realistic skin with imperfections, realistic eyes, exact same facial identity, exact same clothing, exact same details, correct body structure"
 
     input_payload = {
         "prompt": prompt,

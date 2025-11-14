@@ -3,6 +3,9 @@ from ai_api_utils.replicate import run_prediction_sync
 MODEL_VERSION = "95fcc2a26d3899cd6c2691c900465aaeff466285a65c14638cc5f36f34befaf1"
 
 def remove_background(image_url):
+    if not isinstance(image_url, str):
+        raise Exception(f"image_url must be string, got {type(image_url)}")
+
     input_payload = {
         "image": image_url
     }

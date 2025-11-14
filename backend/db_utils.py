@@ -1,12 +1,11 @@
 import os
 from supabase import create_client, Client
 from dotenv import load_dotenv
-from PIL import Image
+from PIL import Image as PILImage
 import io
 
 load_dotenv()
 
-# Supabase client
 supabase_url = os.getenv('SUPABASE_URL')
 supabase_key = os.getenv('SUPABASE_KEY')
 bucket_name = os.getenv('SUPABASE_BUCKET_NAME', 'uploads')
@@ -22,10 +21,10 @@ def upload_image_to_supabase(image_file, filename):
         else:
             image_data = image_file
 
-        img = Image.open(io.BytesIO(image_data))
+        img = PILImage.open(io.BytesIO(image_data))
 
         if img.mode in ('RGBA', 'LA', 'P'):
-            background = Image.new('RGB', img.size, (255, 255, 255))
+            background = PILImage.new('RGB', img.size, (255, 255, 255))
             if img.mode == 'P':
                 img = img.convert('RGBA')
             background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
@@ -60,3 +59,39 @@ def delete_image_from_supabase(filename):
         return True
     except Exception as e:
         raise Exception(f"Failed to delete from Supabase: {str(e)}")
+
+
+def serialize_value(obj):
+    if hasattr(obj, 'to_dict'):
+        return obj.to_dict()
+    elif hasattr(obj, '__dict__'):
+        return {k: serialize_value(v) for k, v in obj.__dict__.items()}
+    elif isinstance(obj, dict):
+        return {k: serialize_value(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_value(item) for item in obj]
+    else:
+        return obj
+
+
+def create_run(model_url, clothing_url, intermediate_outputs, outputs, settings):
+    inputs = {
+        "model": model_url,
+        "clothing": clothing_url,
+        "settings": settings
+    }
+
+    outputs_json = [serialize_value(img) for img in outputs]
+    intermediate_json = serialize_value(intermediate_outputs)
+
+    result = supabase.table('runs').insert({
+        'is_sample': False,
+        'inputs': inputs,
+        'intermediate_outputs': intermediate_json,
+        'outputs': outputs_json
+    }).execute()
+
+    if result.data and len(result.data) > 0:
+        return result.data[0]['id']
+    else:
+        raise Exception("Failed to create run in database")

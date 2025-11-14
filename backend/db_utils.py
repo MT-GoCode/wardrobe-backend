@@ -75,6 +75,7 @@ def serialize_value(obj):
 
 
 def create_run(model_url, clothing_url, intermediate_outputs, outputs, settings):
+    """Legacy function for backward compatibility. Creates a complete run."""
     inputs = {
         "model": model_url,
         "clothing": clothing_url,
@@ -88,10 +89,78 @@ def create_run(model_url, clothing_url, intermediate_outputs, outputs, settings)
         'is_sample': False,
         'inputs': inputs,
         'intermediate_outputs': intermediate_json,
-        'outputs': outputs_json
+        'outputs': outputs_json,
+        'status': 'completed'
     }).execute()
 
     if result.data and len(result.data) > 0:
         return result.data[0]['id']
     else:
         raise Exception("Failed to create run in database")
+
+
+def create_pending_run(model_url, clothing_url, settings):
+    """
+    Create a new run in 'pending' status without outputs.
+    This is called immediately when a generation request is received.
+
+    Returns:
+        str: The run_id of the created run
+    """
+    inputs = {
+        "model": model_url,
+        "clothing": clothing_url,
+        "settings": settings
+    }
+
+    result = supabase.table('runs').insert({
+        'is_sample': False,
+        'inputs': inputs,
+        'intermediate_outputs': None,
+        'outputs': None,
+        'status': 'pending'
+    }).execute()
+
+    if result.data and len(result.data) > 0:
+        return result.data[0]['id']
+    else:
+        raise Exception("Failed to create pending run in database")
+
+
+def update_run_with_results(run_id, intermediate_outputs, outputs):
+    """
+    Update a run with the final results after generation completes.
+
+    Args:
+        run_id: The ID of the run to update
+        intermediate_outputs: The intermediate outputs from the pipeline
+        outputs: The final output images
+    """
+    outputs_json = [serialize_value(img) for img in outputs]
+    intermediate_json = serialize_value(intermediate_outputs)
+
+    result = supabase.table('runs').update({
+        'intermediate_outputs': intermediate_json,
+        'outputs': outputs_json,
+        'status': 'completed'
+    }).eq('id', run_id).execute()
+
+    if not result.data or len(result.data) == 0:
+        raise Exception(f"Failed to update run {run_id} in database")
+
+
+def update_run_with_error(run_id, error_message):
+    """
+    Update a run with error status when generation fails.
+
+    Args:
+        run_id: The ID of the run to update
+        error_message: The error message to store
+    """
+    result = supabase.table('runs').update({
+        'status': 'failed',
+        'error': error_message
+    }).eq('id', run_id).execute()
+
+    if not result.data or len(result.data) == 0:
+        raise Exception(f"Failed to update run {run_id} with error")

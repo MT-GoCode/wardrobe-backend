@@ -3,7 +3,7 @@ from ai_api_utils.wavespeed import create_prediction, poll_prediction
 
 
 def vton_single(reposed_image_url, clothing_image_urls, setting, gender, clothing_type):
-    prompt = f"a photo of the {gender} wearing the exact {clothing_type}, same pose, with exact same face, exact same eyes, exact same facial identity, exact same {clothing_type}, exact same body structure, exact same details in the {clothing_type}, exact same colors in {clothing_type}, exact same texture in {clothing_type}, correct realistic face, correct body structure, realistic skin with imperfections, realistic eyes"
+    prompt = f"a photo of the {gender} wearing the exact {clothing_type}, same pose, with exact same face, exact same eyes, exact same facial identity, exact same {clothing_type}, exact same body structure, exact same texture in the {clothing_type}, exact same colors in {clothing_type}, correct realistic face, correct body structure, realistic skin without imperfections, realistic eyes"
 
     input_payload = {
         "prompt": prompt,

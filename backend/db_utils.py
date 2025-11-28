@@ -164,3 +164,37 @@ def update_run_with_error(run_id, error_message):
 
     if not result.data or len(result.data) == 0:
         raise Exception(f"Failed to update run {run_id} with error")
+
+
+def get_all_presets():
+    """
+    Get all presets from the presets table.
+    
+    Returns:
+        List of dicts with 'id', 'name', 'ref_image_background_only'
+    """
+    result = supabase.table('presets').select('id, name, ref_image_background_only').execute()
+    
+    if result.data:
+        return result.data
+    return []
+
+
+def get_preset_names_by_ids(preset_ids):
+    """
+    Get preset names for a list of preset IDs.
+    
+    Args:
+        preset_ids: List of preset IDs (integers)
+        
+    Returns:
+        Dict mapping preset_id to preset name
+    """
+    if not preset_ids:
+        return {}
+    
+    result = supabase.table('presets').select('id, name').in_('id', preset_ids).execute()
+    
+    if result.data:
+        return {row['id']: row['name'] for row in result.data}
+    return {}

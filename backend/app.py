@@ -3,10 +3,15 @@ import threading
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from models.image import Image
-import user_pipeline.main as user_pipeline
 import inference_pipeline.main as inference_pipeline
-from settings_config import SETTINGS
-from db_utils import create_run, create_pending_run, update_run_with_results, update_run_with_error
+from db_utils import (
+    create_pending_run, 
+    update_run_with_results, 
+    update_run_with_error,
+    get_all_presets,
+    get_preset_names_by_ids,
+    supabase
+)
 from progress_tracker import progress_tracker
 
 app = Flask(__name__)
@@ -20,20 +25,27 @@ os.makedirs(ASSETS_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32MB max file size
 
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({'status': 'ok'}), 200
 
-@app.route('/settings', methods=['GET'])
-def get_settings():
-    settings_list = []
-    for key, value in SETTINGS.items():
-        settings_list.append({
-            'name': key,
-            'category': value['category'],
-            'image_url': value['image']
-        })
-    return jsonify({'settings': settings_list}), 200
+
+@app.route('/presets', methods=['GET'])
+def get_presets():
+    """
+    Get all available presets.
+    
+    Returns:
+        List of presets with id, name, and ref_image_background_only
+    """
+    try:
+        presets = get_all_presets()
+        return jsonify({'presets': presets}), 200
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/assets/backgrounds/<filename>', methods=['GET'])
@@ -44,7 +56,6 @@ def serve_background_image(filename):
 @app.route('/runs/<run_id>', methods=['GET'])
 def get_run(run_id):
     try:
-        from db_utils import supabase
         result = supabase.table('runs').select('*').eq('id', run_id).execute()
 
         if not result.data or len(result.data) == 0:
@@ -59,15 +70,28 @@ def get_run(run_id):
 
 @app.route('/sample_generations', methods=['GET'])
 def get_sample_generations():
+    """
+    Get sample generations with preset IDs decoded to names.
+    """
     try:
-        from db_utils import supabase
         result = supabase.table('runs').select('inputs,outputs').eq('is_sample', True).execute()
 
         samples = []
         for row in result.data:
+            inputs = row.get('inputs', {})
+            outputs = row.get('outputs', [])
+            
+            # Decode preset IDs to names if present
+            preset_ids = inputs.get('settings', [])
+            if preset_ids and isinstance(preset_ids[0], int):
+                # These are numeric IDs, decode to names
+                preset_names_map = get_preset_names_by_ids(preset_ids)
+                preset_names = [preset_names_map.get(pid, str(pid)) for pid in preset_ids]
+                inputs = {**inputs, 'settings': preset_names}
+            
             samples.append({
-                'inputs': row.get('inputs'),
-                'outputs': row.get('outputs')
+                'inputs': inputs,
+                'outputs': outputs
             })
 
         return jsonify(samples), 200
@@ -77,31 +101,39 @@ def get_sample_generations():
         return jsonify({'error': str(e)}), 500
 
 
-def _run_generation_worker(run_id, person_img, bgr_result, clothing_imgs, setting_types):
+def _run_generation_worker(run_id, run_id_str, person_img, clothing_img, preset_ids):
     """
     Worker function that runs the generation pipeline in a background thread.
     Updates progress tracker and Supabase database upon completion.
+    
+    Args:
+        run_id: Integer run ID for database operations
+        run_id_str: String run ID for progress tracker
     """
     try:
+        # Create progress callback that uses string run_id
+        # Signature: callback(progress) - run_id_str is captured in closure
+        def progress_callback(progress):
+            progress_tracker.update_progress(run_id_str, progress)
+        
         # Run the pipeline with progress tracking
         pipeline_result = inference_pipeline.run(
-            bgr_person_image=bgr_result,
             person_image=person_img,
-            clothing_images=clothing_imgs,
-            setting_types=setting_types,
-            run_id=run_id,
-            progress_callback=progress_tracker.update_progress
+            clothing_image=clothing_img,
+            preset_ids=preset_ids,
+            run_id=run_id_str,  # Pass string for callback
+            progress_callback=progress_callback
         )
 
-        # Update Supabase with the results
+        # Update Supabase with the results (use integer run_id)
         update_run_with_results(
             run_id=run_id,
             intermediate_outputs=pipeline_result['intermediate_outputs'],
             outputs=pipeline_result['outputs']
         )
 
-        # Mark as complete in progress tracker
-        progress_tracker.mark_complete(run_id)
+        # Mark as complete in progress tracker (use string run_id)
+        progress_tracker.mark_complete(run_id_str)
 
     except Exception as e:
         import traceback
@@ -110,32 +142,39 @@ def _run_generation_worker(run_id, person_img, bgr_result, clothing_imgs, settin
 
         # Update both Supabase and progress tracker with error
         try:
-            update_run_with_error(run_id, error_msg)
+            update_run_with_error(run_id, error_msg)  # Integer for database
         except Exception as db_error:
             print(f"Failed to update database with error: {db_error}")
 
-        progress_tracker.mark_error(run_id, error_msg)
+        progress_tracker.mark_error(run_id_str, error_msg)  # String for tracker
 
 
 @app.route('/check_progress', methods=['POST'])
 def check_progress():
     """
     Check the progress of one or more generation runs.
+    
+    Progress Tracking System:
+    - When a generation starts, a run is created in the database (returns integer ID)
+    - The progress tracker stores progress in memory using string keys
+    - Client sends run_ids as strings in the request
+    - Progress is updated by the background worker thread as the pipeline runs
+    - Once complete, results are saved to database and progress tracker marks it complete
 
     Request body:
         {
-            "run_ids": ["uuid1", "uuid2", ...]
+            "run_ids": ["27", "28", ...]  # String IDs
         }
 
     Response:
         {
             "progress": {
-                "uuid1": {
+                "27": {
                     "progress": 45,
                     "is_complete": false,
                     "error": null
                 },
-                "uuid2": {
+                "28": {
                     "progress": 100,
                     "is_complete": true,
                     "error": null
@@ -194,6 +233,11 @@ def generate_request():
     Create a new generation request. Immediately returns a run_id and starts
     processing in the background. Clients should poll /check_progress to monitor
     progress and then fetch results from /runs/<run_id> when complete.
+    
+    Expected form data:
+        - personImage: File - the model/person image
+        - clothingImages: File(s) - the clothing image(s) (only first one is used)
+        - settings: JSON string - array of preset IDs (integers)
     """
     try:
         if 'personImage' not in request.files:
@@ -208,41 +252,46 @@ def generate_request():
         settings_json = request.form['settings']
 
         import json
-        setting_types = json.loads(settings_json)
+        preset_ids = json.loads(settings_json)
 
-        if not isinstance(setting_types, list) or len(setting_types) == 0:
-            return jsonify({'error': 'Settings must be a non-empty array'}), 400
-        if len(setting_types) > 3:
-            return jsonify({'error': 'Maximum 3 settings allowed'}), 400
-
-        for st in setting_types:
-            if st not in SETTINGS:
-                return jsonify({'error': f'Invalid setting type: {st}'}), 400
+        if not isinstance(preset_ids, list) or len(preset_ids) == 0:
+            return jsonify({'error': 'Settings must be a non-empty array of preset IDs'}), 400
+        if len(preset_ids) > 3:
+            return jsonify({'error': 'Maximum 3 presets allowed'}), 400
+        
+        # Validate that all preset IDs are integers
+        for pid in preset_ids:
+            if not isinstance(pid, int):
+                return jsonify({'error': f'Invalid preset ID: {pid}. Must be an integer.'}), 400
 
         # Process images and upload them
         person_img = Image(filepath=person_file)
-        bgr_result = user_pipeline.run(person_img)
-        clothing_imgs = [Image(filepath=f) for f in clothing_files]
+        # Only use the first clothing image
+        clothing_img = Image(filepath=clothing_files[0])
 
         # Create pending run in database immediately
         run_id = create_pending_run(
             model_url=person_img.url,
-            clothing_url=clothing_imgs[0].url if clothing_imgs else None,
-            settings=setting_types
+            clothing_url=clothing_img.url,
+            settings=preset_ids  # Now storing numeric IDs
         )
+        
+        # Convert run_id to string for consistency (database returns int, tracker uses str keys)
+        run_id_str = str(run_id)
 
         # Initialize progress tracker
-        progress_tracker.create_run(run_id)
+        progress_tracker.create_run(run_id_str)
 
         # Start background thread for generation
+        # Pass run_id_str to worker for progress tracking, but keep run_id (int) for database
         thread = threading.Thread(
             target=_run_generation_worker,
-            args=(run_id, person_img, bgr_result, clothing_imgs, setting_types)
+            args=(run_id, run_id_str, person_img, clothing_img, preset_ids)
         )
         thread.daemon = True
         thread.start()
 
-        # Return run_id immediately
+        # Return run_id (int) immediately - client will convert to string when checking progress
         return jsonify({'run_id': run_id}), 202  # 202 Accepted
 
     except Exception as e:
@@ -251,7 +300,8 @@ def generate_request():
         return jsonify({'error': str(e)}), 500
 
 
+# Development server - only used when running: python app.py
+# In production, Gunicorn runs the app (see /etc/systemd/system/wardrobe.service)
+# The port 4000 here is irrelevant in production - Gunicorn binds to 127.0.0.1:8000
 if __name__ == '__main__':
-    # Flask development server supports multiple concurrent requests by default
-    # For production, use a WSGI server like Gunicorn with multiple workers
     app.run(debug=True, host='0.0.0.0', port=4000, threaded=True)

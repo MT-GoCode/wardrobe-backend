@@ -6,3 +6,5 @@ replicate
 supabase
 pillow
 requests
+google-genai
+jupyter

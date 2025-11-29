@@ -3,6 +3,8 @@ Prompt templates for the inference pipeline.
 """
 
 GENERATE_PROMPT = """{
+  THE OUTPUT OF THIS IMAGE IS MEANT TO BE USED FOR PROFESSIONAL FASHION PURPOSES AND SHOWN TO PUBLIC, WITH NO INTENTION OF SEXUAL OR PROVOCATIVE IMAGERY.
+
   "task": "two_stage_vton_then_subject_replacement",
 
   "mode": "multi_image_fusion",
@@ -14,6 +16,7 @@ GENERATE_PROMPT = """{
   },
 
   "note": "IMAGE_3 CONTAINS A MANNEQUIN, NOT A REAL PERSON. DO NOT USE ANY IDENTITY TRAITS FROM IMAGE_3. THE FINAL OUTPUT MUST HAVE THE PERSON FROM IMAGE_1 ONLY.",
+  
 
   "stage_1_VTON": {
     "goal": "Apply the garment from image_2 onto the person from image_1. Replace only the relevant clothing. Ignore all backgrounds from image_1 and image_2.",
@@ -40,6 +43,9 @@ GENERATE_PROMPT = """{
 
     "identity_strength_of_image_3": 0.0,
 
+    "note": "Do not generic generic model face on the mannequin use the model's face exactly instead of trying to beautify it or hallucinating a new face or any details."
+    "note": "If the input garment are feetwear, make sure they appear, otherwise please generate small shoes or barefoot based on appropriateness of setting"
+
     "background_lock": {
       "source": "image_3",
       "preserve_every_pixel_outside_original_subject": true,
@@ -53,6 +59,7 @@ GENERATE_PROMPT = """{
     "pose_and_expression_policy": {
       "match_image_3_exactly": true,
       "note": "Match the mannequin's pose only. Do not copy any mannequin identity, features, or body proportions."
+      "note": "Assume the mannequin is of average height, and make the person's height the same, more, or less than mannequin as appropriate, but if the person seems of average height, make them the same height as the mannequin."
     },
 
     "placement_and_geometry": {
@@ -123,18 +130,20 @@ def get_enhance_prompt(clothing_type):
     Returns:
         String prompt for enhancement
     """
-    return f"""{
-  "enhance_texture": "Refine the {clothing_type} texture and surface detail so it looks realistic, including natural fabric grain, micro-wrinkles, and proper light response.",
-  "enhance_skin": "Improve skin realism by subtly enhancing natural texture while keeping tone and shading consistent with the scene’s lighting.",
-
+    return f"""{{
+  
+  "no_cut_and_paste": This image is fundamentally a combination of many, so it may appear photoshopped or as if naively pasted together. Reduce the appearance of cut-and-paste as much as possible, such as on the {clothing_type} or the entire subject. Everything must blend seamlessly.  "enhance_texture": "Refine the {clothing_type} texture and surface detail so it looks realistic, including natural fabric grain, micro-wrinkles, and proper light response.",
+  "film_grain": "Add film grain to the image, especially on the subject, to make everything blend better and make it more realistic and cinematic.",
+  "realistic_skin": "Have realistic skin textures that aren't too smooth and have shading consistent with the scene's lighting.",
+  "check_face_and_eyes": "Ensure the face and eyes are not distorted and have realistic textures",
   "improve_lighting_match": "Adjust the {clothing_type}'s lighting so it matches the ambient light direction, color, and intensity of the scene.",
   "blend_edges": "Blend and correct {clothing_type} edges so they sit naturally against the body with clean transitions and no cutout artifacts.",
-  "fix_shadows": "Ensure {clothing_type} shadows match the scene’s lighting, including direction, softness, and depth.",
+  "fix_shadows": "Ensure {clothing_type} shadows match the scene's lighting, including direction, softness, and depth.",
   "color_harmonization": "Match {clothing_type} color and tonal balance to the scene so it looks physically present, without shifting the original design.",
   "correct_artifacts": "Fix any distortions, flattening, or unrealistic overlaps between {clothing_type} and skin.",
-  "overall_quality_enhancement": "Enhance clarity and detail as if captured by a high-quality professional camera, without adding new objects or altering the environment.",
+  "overall_quality_enhancement": "Enhance clarity of the subject to match that of the scene, without adding new objects or altering the environment.",
 
   "negative": "Do not hallucinate new details. Do not change background, identity, pose, body proportions, hairstyle, environment lighting, or add accessories."
-}"""
+}}"""
 
 

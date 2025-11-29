@@ -53,9 +53,12 @@ def run(person_image, clothing_image, preset_ids, run_id=None, progress_callback
     progress_per_preset_generate = 50 / num_presets  # 50% total for generation stage (25% -> 75%)
     
     generate_results = []
-    generated_image_urls = []
+    # Use dict keyed by preset_id for safer data passing
+    generated_image_urls_by_preset = {}
     
     for i, preset_detail in enumerate(preset_details):
+        preset_id = preset_detail['preset_id']
+        
         # Generate image for this preset
         generated_image_bytes = generate(
             model_image_url=person_url,
@@ -64,16 +67,30 @@ def run(person_image, clothing_image, preset_ids, run_id=None, progress_callback
             garment_description=garment_description
         )
         
+        # If generation failed (returns None), skip this preset
+        if generated_image_bytes is None:
+            # Record the failure in generate_results
+            generate_results.append({
+                'preset_id': preset_id,
+                'preset_name': preset_detail['name'],
+                'output_url': None,
+                'error': 'Generation failed after retries'
+            })
+            # Update progress and continue to next preset
+            current_progress = 25 + int((i + 1) * progress_per_preset_generate)
+            update_progress(min(current_progress, 75))
+            continue
+        
         # Upload generated image to Supabase
         filename = generate_uuid_filename()
         uploaded_url = upload_image_to_supabase(generated_image_bytes, filename)
         
-        # Store generated image URL for enhance step
-        generated_image_urls.append(uploaded_url)
+        # Store generated image URL for enhance step (keyed by preset_id)
+        generated_image_urls_by_preset[preset_id] = uploaded_url
         
         # Store result info for intermediate outputs
         generate_results.append({
-            'preset_id': preset_detail['preset_id'],
+            'preset_id': preset_id,
             'preset_name': preset_detail['name'],
             'output_url': uploaded_url
         })
@@ -86,17 +103,46 @@ def run(person_image, clothing_image, preset_ids, run_id=None, progress_callback
     
     # Stage 3: Enhance (75% -> 100%)
     # Calculate progress increment per preset for enhancement
-    progress_per_preset_enhance = 25 / num_presets  # 25% total for enhancement stage (75% -> 100%)
+    # Only count presets that successfully generated
+    num_successful_generates = len(generated_image_urls_by_preset)
+    if num_successful_generates == 0:
+        raise Exception("No images were successfully generated")
+    
+    progress_per_preset_enhance = 25 / num_successful_generates  # 25% total for enhancement stage (75% -> 100%)
     
     final_images = []
     enhance_results = []
+    enhance_progress_count = 0
     
-    for i, generated_url in enumerate(generated_image_urls):
+    # Process each preset that successfully generated
+    for preset_detail in preset_details:
+        preset_id = preset_detail['preset_id']
+        
+        # Skip if generation failed for this preset
+        if preset_id not in generated_image_urls_by_preset:
+            continue
+        
+        generated_url = generated_image_urls_by_preset[preset_id]
+        
         # Enhance the generated image
         enhanced_image_bytes = enhance(
             generated_image_url=generated_url,
             clothing_type=clothing_type
         )
+        
+        # If enhancement failed (returns None), skip this preset
+        if enhanced_image_bytes is None:
+            # Still record the failure in enhance_results
+            enhance_results.append({
+                'preset_id': preset_id,
+                'preset_name': preset_detail['name'],
+                'output_url': None,
+                'error': 'Enhancement failed after retries'
+            })
+            enhance_progress_count += 1
+            current_progress = 75 + int(enhance_progress_count * progress_per_preset_enhance)
+            update_progress(min(current_progress, 100))
+            continue
         
         # Upload enhanced image to Supabase
         filename = generate_uuid_filename()
@@ -108,13 +154,14 @@ def run(person_image, clothing_image, preset_ids, run_id=None, progress_callback
         
         # Store result info
         enhance_results.append({
-            'preset_id': preset_details[i]['preset_id'],
-            'preset_name': preset_details[i]['name'],
+            'preset_id': preset_id,
+            'preset_name': preset_detail['name'],
             'output_url': uploaded_url
         })
         
         # Update progress
-        current_progress = 75 + int((i + 1) * progress_per_preset_enhance)
+        enhance_progress_count += 1
+        current_progress = 75 + int(enhance_progress_count * progress_per_preset_enhance)
         update_progress(min(current_progress, 100))
     
     update_progress(100)

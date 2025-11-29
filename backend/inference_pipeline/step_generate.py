@@ -45,7 +45,7 @@ def download_image_to_pil(url):
     return PILImage.open(BytesIO(response.content))
 
 
-def generate_image(model_image_url, clothing_image_url, ref_image_url, garment_description, ref_img_description):
+def generate_image(model_image_url, clothing_image_url, ref_image_url, garment_description, ref_img_description, max_retries=3):
     """
     Generate an image using Gemini's image generation SDK.
     
@@ -53,6 +53,7 @@ def generate_image(model_image_url, clothing_image_url, ref_image_url, garment_d
     - Download images and open with PIL Image.open()
     - Pass images directly to generate_content
     - Handle response parts properly
+    - Retries up to max_retries times if response is None or has no parts
     
     Args:
         model_image_url: URL of the model/person image (image_1)
@@ -60,9 +61,10 @@ def generate_image(model_image_url, clothing_image_url, ref_image_url, garment_d
         ref_image_url: URL of the reference/scene image (image_3)
         garment_description: Dict with garment description
         ref_img_description: String description of the reference image
+        max_retries: Maximum number of retry attempts (default: 3)
         
     Returns:
-        bytes: The generated image data
+        bytes: The generated image data, or None if all retries fail
     """
     api_key = os.environ.get("GOOGLE_AI_STUDIO_API_KEY")
     if not api_key:
@@ -79,54 +81,78 @@ def generate_image(model_image_url, clothing_image_url, ref_image_url, garment_d
     # Initialize client
     client = genai.Client(api_key=api_key)
     
-    # Use the exact pattern from gemini_guide.txt
-    # Order: prompt text, then images in order (image_1, image_2, image_3)
-    response = client.models.generate_content(
-        model="gemini-3-pro-image-preview",
-        contents=[
-            prompt_text,
-            model_image,      # image_1
-            clothing_image,   # image_2
-            ref_image,        # image_3
-        ],
-        config=types.GenerateContentConfig(
-            response_modalities=['TEXT', 'IMAGE'],
-            image_config=types.ImageConfig(
-                aspect_ratio="1:1",
-                image_size="1K"
-            ),
-        )
-    )
+    # Retry logic
+    for attempt in range(max_retries):
+        try:
+            # Use the exact pattern from gemini_guide.txt
+            # Order: prompt text, then images in order (image_1, image_2, image_3)
+            response = client.models.generate_content(
+                model="gemini-3-pro-image-preview",
+                contents=[
+                    prompt_text,
+                    model_image,      # image_1
+                    clothing_image,   # image_2
+                    ref_image,        # image_3
+                ],
+                config=types.GenerateContentConfig(
+                    response_modalities=['TEXT', 'IMAGE'],
+                    image_config=types.ImageConfig(
+                        aspect_ratio="1:1",
+                        image_size="4K"
+                    ),
+                )
+            )
+            
+            # Check if response or response.parts is None
+            if response is None or response.parts is None:
+                if attempt < max_retries - 1:
+                    continue  # Retry
+                else:
+                    return None  # All retries exhausted
+            
+            # Extract the generated image from response (as shown in gemini_guide.txt)
+            generated_image = None
+            for part in response.parts:
+                if part.text is not None:
+                    # Text response (if any)
+                    continue
+                elif image := part.as_image():
+                    generated_image = image
+                    break
+            
+            if not generated_image:
+                if attempt < max_retries - 1:
+                    continue  # Retry
+                else:
+                    return None  # All retries exhausted
+            
+            # part.as_image() returns a google.genai.types.Image object
+            # Its save() method only accepts a file path (string), not a file-like object
+            # So we save to a temporary file and read it back
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            
+            generated_image.save(tmp_path)
+            
+            # Read the file back as bytes
+            with open(tmp_path, 'rb') as f:
+                image_bytes = f.read()
+            
+            # Clean up temp file
+            os.unlink(tmp_path)
+            
+            return image_bytes
+            
+        except Exception as e:
+            # If this is the last attempt, return None
+            if attempt < max_retries - 1:
+                continue  # Retry on exception
+            else:
+                # Log the error but return None gracefully
+                return None
     
-    # Extract the generated image from response (as shown in gemini_guide.txt)
-    generated_image = None
-    for part in response.parts:
-        if part.text is not None:
-            # Text response (if any)
-            continue
-        elif image := part.as_image():
-            generated_image = image
-            break
-    
-    if not generated_image:
-        raise Exception("No image was generated by Gemini")
-    
-    # part.as_image() returns a google.genai.types.Image object
-    # Its save() method only accepts a file path (string), not a file-like object
-    # So we save to a temporary file and read it back
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-        tmp_path = tmp_file.name
-    
-    generated_image.save(tmp_path)
-    
-    # Read the file back as bytes
-    with open(tmp_path, 'rb') as f:
-        image_bytes = f.read()
-    
-    # Clean up temp file
-    os.unlink(tmp_path)
-    
-    return image_bytes
+    # Should not reach here, but return None as fallback
+    return None
 
 
 def generate(model_image_url, clothing_image_url, preset_detail, garment_description):
@@ -140,7 +166,7 @@ def generate(model_image_url, clothing_image_url, preset_detail, garment_descrip
         garment_description: Dict with garment description
         
     Returns:
-        bytes: The generated image data
+        bytes: The generated image data, or None if generation fails after retries
     """
     ref_image_url = preset_detail['ref_image_full']
     ref_img_description = preset_detail['description']

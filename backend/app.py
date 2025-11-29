@@ -181,6 +181,12 @@ def check_progress():
                 }
             }
         }
+    
+    Error codes:
+        - 200: Success, all runs found and no errors
+        - 400: Bad request (invalid input)
+        - 404: All requested runs not found
+        - 500: Server error or runs have failed with errors
     """
     try:
         data = request.get_json()
@@ -202,23 +208,44 @@ def check_progress():
         # Get progress for all requested runs
         progress_data = progress_tracker.get_multiple_progress(run_ids)
 
-        # Format response
+        # Check if progress tracker itself failed (all None)
+        if progress_data is None or all(p is None for p in progress_data.values()):
+            return jsonify({'error': 'Failed to retrieve progress from database'}), 500
+
+        # Format response and check for errors
         response = {}
+        has_errors = False
+        all_not_found = True
+
         for run_id, run_progress in progress_data.items():
             if run_progress is None:
-                # Run not found in progress tracker - might be old or not started
+                # Run not found in database
                 response[run_id] = {
                     'progress': 0,
                     'is_complete': False,
-                    'error': 'Run not found in progress tracker'
+                    'error': 'Run not found'
                 }
             else:
+                all_not_found = False
+                # Check if this run has an error
+                if run_progress.error:
+                    has_errors = True
+                
                 response[run_id] = {
                     'progress': run_progress.progress,
                     'is_complete': run_progress.is_complete,
                     'error': run_progress.error
                 }
 
+        # Return appropriate status codes
+        if all_not_found:
+            return jsonify({'error': 'All requested runs not found', 'progress': response}), 404
+        
+        if has_errors:
+            # At least one run has failed with an error
+            return jsonify({'error': 'One or more runs have failed', 'progress': response}), 500
+
+        # All runs found and no errors
         return jsonify({'progress': response}), 200
 
     except Exception as e:
@@ -252,7 +279,10 @@ def generate_request():
         settings_json = request.form['settings']
 
         import json
-        preset_ids = json.loads(settings_json)
+        try:
+            preset_ids = json.loads(settings_json)
+        except json.JSONDecodeError as json_error:
+            return jsonify({'error': f'Invalid JSON in settings: {str(json_error)}'}), 400
 
         if not isinstance(preset_ids, list) or len(preset_ids) == 0:
             return jsonify({'error': 'Settings must be a non-empty array of preset IDs'}), 400
@@ -265,31 +295,59 @@ def generate_request():
                 return jsonify({'error': f'Invalid preset ID: {pid}. Must be an integer.'}), 400
 
         # Process images and upload them
-        person_img = Image(filepath=person_file)
-        # Only use the first clothing image
-        clothing_img = Image(filepath=clothing_files[0])
+        try:
+            person_img = Image(filepath=person_file)
+            # Only use the first clothing image
+            clothing_img = Image(filepath=clothing_files[0])
+        except Exception as img_error:
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': f'Failed to process images: {str(img_error)}'}), 500
 
         # Create pending run in database immediately
-        run_id = create_pending_run(
-            model_url=person_img.url,
-            clothing_url=clothing_img.url,
-            settings=preset_ids  # Now storing numeric IDs
-        )
+        try:
+            run_id = create_pending_run(
+                model_url=person_img.url,
+                clothing_url=clothing_img.url,
+                settings=preset_ids  # Now storing numeric IDs
+            )
+        except Exception as db_error:
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': f'Failed to create run in database: {str(db_error)}'}), 500
         
         # Convert run_id to string for consistency (database returns int, tracker uses str keys)
         run_id_str = str(run_id)
 
         # Initialize progress tracker
-        progress_tracker.create_run(run_id_str)
+        try:
+            progress_tracker.create_run(run_id_str)
+        except Exception as tracker_error:
+            import traceback
+            traceback.print_exc()
+            # Run was created but progress tracking failed - still return the run_id
+            # but log the error (the worker thread will handle progress updates)
+            print(f"Warning: Failed to initialize progress tracker for run {run_id_str}: {tracker_error}")
 
         # Start background thread for generation
         # Pass run_id_str to worker for progress tracking, but keep run_id (int) for database
-        thread = threading.Thread(
-            target=_run_generation_worker,
-            args=(run_id, run_id_str, person_img, clothing_img, preset_ids)
-        )
-        thread.daemon = True
-        thread.start()
+        try:
+            thread = threading.Thread(
+                target=_run_generation_worker,
+                args=(run_id, run_id_str, person_img, clothing_img, preset_ids)
+            )
+            thread.daemon = True
+            thread.start()
+        except Exception as thread_error:
+            import traceback
+            traceback.print_exc()
+            # Run was created but thread failed to start - mark as error
+            try:
+                update_run_with_error(run_id, f'Failed to start generation thread: {str(thread_error)}')
+                progress_tracker.mark_error(run_id_str, f'Failed to start generation thread: {str(thread_error)}')
+            except Exception as update_error:
+                print(f"Failed to update run with thread error: {update_error}")
+            return jsonify({'error': f'Failed to start generation: {str(thread_error)}'}), 500
 
         # Return run_id (int) immediately - client will convert to string when checking progress
         return jsonify({'run_id': run_id}), 202  # 202 Accepted

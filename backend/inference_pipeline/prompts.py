@@ -5,18 +5,18 @@ Prompt templates for the inference pipeline.
 GENERATE_PROMPT = """{
   "task": "two_stage_vton_then_subject_replacement",
 
-  THE FINAL OUTPUT MUST HAVE THE PERSON FROM IMAGE_1, AND NONE OF THE PERSON FROM IMAGE_3. THE IDENTITY MUST COME FROM IMAGE_1 ALONE.
-
   "mode": "multi_image_fusion",
 
   "image_roles": {
     "image_1": "model_identity_source",
     "image_2": "garment_source",
-    "image_3": "scene_and_pose_reference"
+    "image_3": "scene_and_pose_reference (mannequin_only)"
   },
 
+  "note": "IMAGE_3 CONTAINS A MANNEQUIN, NOT A REAL PERSON. DO NOT USE ANY IDENTITY TRAITS FROM IMAGE_3. THE FINAL OUTPUT MUST HAVE THE PERSON FROM IMAGE_1 ONLY.",
+
   "stage_1_VTON": {
-    "goal": "Apply the garment from image_2 onto the person from image_1. The appropriate garments from image_1 should be replaced by this new garment. Disregard the backgrounds from image_1 and image_2 completely.",
+    "goal": "Apply the garment from image_2 onto the person from image_1. Replace only the relevant clothing. Ignore all backgrounds from image_1 and image_2.",
 
     "identity": {
       "source": "image_1",
@@ -25,20 +25,18 @@ GENERATE_PROMPT = """{
       "preserve_hair": true,
       "preserve_hair_color": true,
       "preserve_hairline": true,
+      "preserve_hairstyle": true,
       "preserve_skin_color": true,
-      "preserve_eyes": true,
-      "preserve_hairstyle": true, such as bangs, long hair, curly hair, ponytails etc.,
       "preserve_skin_tone": true,
       "preserve_body_shape": true,
-      "identity_strength": 1.0,
+      "identity_strength": 1.0
     },
 
     "garment": <<<GARMENT_DESCRIPTION>>>
-
   },
 
   "stage_2_subject_replacement": {
-    "goal": "Replace the subject in image_3 with the output from Stage 1",
+    "goal": "Replace the mannequin in image_3 with the Stage 1 output. The mannequin is only used for pose, placement, and lighting reference.",
 
     "identity_strength_of_image_3": 0.0,
 
@@ -47,14 +45,14 @@ GENERATE_PROMPT = """{
       "preserve_every_pixel_outside_original_subject": true,
       "no_scene_regeneration": true,
       "no_new_objects": true,
-      "allowed_modification_zone": "original_subject_silhouette_only"
+      "allowed_modification_zone": "original_mannequin_silhouette_only"
     },
 
     "image_3_description": <<<REF_IMG_DESCRIPTION>>>,
 
-
     "pose_and_expression_policy": {
-      "match_image_3_exactly": true
+      "match_image_3_exactly": true,
+      "note": "Match the mannequin's pose only. Do not copy any mannequin identity, features, or body proportions."
     },
 
     "placement_and_geometry": {
@@ -67,7 +65,7 @@ GENERATE_PROMPT = """{
 
     "relighting": {
       "source": "image_3",
-      "dominant_color": "blue",
+      "match_environment_lighting": true,
       "match_shadow_direction": true,
       "match_shadow_intensity": true,
       "match_shadow_softness": true,
@@ -84,22 +82,24 @@ GENERATE_PROMPT = """{
 
   "negative_prompt": [
     "using_body_parts_from_image_3",
+    "copying_mannequin_features",
+    "mannequin_identity_transfer",
+    "wrong body proportions",
     "misproportioned limbs",
-    "wrong body proporitons",
-    "change background",
-    "change lighting in background",
-    "change pose",
-    "change expression",
-    "wrong subject scale",
+    "changing background",
+    "changing lighting in background",
+    "changing pose",
+    "changing expression",
+    "changing subject scale",
     "wrong camera angle",
     "identity change",
     "hair change",
     "bad anatomy",
-    "cutout effect",
+    "cutout edges",
     "halo",
     "floating subject",
-    "wrong color cast",
-    "wrong shadows",
+    "incorrect color cast",
+    "incorrect shadows",
     "background blur"
   ],
 
@@ -109,7 +109,8 @@ GENERATE_PROMPT = """{
     "format": "png",
     "quality": "maximum"
   }
-}"""
+}
+"""
 
 
 def get_enhance_prompt(clothing_type):
@@ -122,12 +123,18 @@ def get_enhance_prompt(clothing_type):
     Returns:
         String prompt for enhancement
     """
-    return f"""Harmonize and correct the {clothing_type} so it appears naturally integrated into the original outdoor scene.
+    return f"""{
+  "enhance_texture": "Refine the {clothing_type} texture and surface detail so it looks realistic, including natural fabric grain, micro-wrinkles, and proper light response.",
+  "enhance_skin": "Improve skin realism by subtly enhancing natural texture while keeping tone and shading consistent with the scene’s lighting.",
 
-Instructions:
+  "improve_lighting_match": "Adjust the {clothing_type}'s lighting so it matches the ambient light direction, color, and intensity of the scene.",
+  "blend_edges": "Blend and correct {clothing_type} edges so they sit naturally against the body with clean transitions and no cutout artifacts.",
+  "fix_shadows": "Ensure {clothing_type} shadows match the scene’s lighting, including direction, softness, and depth.",
+  "color_harmonization": "Match {clothing_type} color and tonal balance to the scene so it looks physically present, without shifting the original design.",
+  "correct_artifacts": "Fix any distortions, flattening, or unrealistic overlaps between {clothing_type} and skin.",
+  "overall_quality_enhancement": "Enhance clarity and detail as if captured by a high-quality professional camera, without adding new objects or altering the environment.",
 
-Do NOT change the subject's pose, body shape, face, expression, or background. Do NOT change the garment design or pattern. Only modify the lighting, texture, edges, shadows, and color blending of the {clothing_type} so it appears physically present in the scene.
+  "negative": "Do not hallucinate new details. Do not change background, identity, pose, body proportions, hairstyle, environment lighting, or add accessories."
+}"""
 
-In addition, enhance or sharpen the quality of the image so it's as if this photo was taken by a professional camera, without hallucinating any new details.
-"""
 

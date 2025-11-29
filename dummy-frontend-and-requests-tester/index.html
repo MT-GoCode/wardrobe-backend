@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload Images</title>
+    <style>
+        #results {
+            margin-top: 20px;
+        }
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .setting-option {
+            cursor: pointer;
+            border: 3px solid transparent;
+            padding: 10px;
+            text-align: center;
+            transition: border-color 0.3s;
+        }
+        .setting-option:hover {
+            border-color: #ddd;
+        }
+        .setting-option.selected {
+            border-color: #007bff;
+            background-color: #f0f8ff;
+        }
+        .setting-option img {
+            width: 100%;
+            height: 120px;
+            object-fit: cover;
+            margin-bottom: 8px;
+        }
+        .setting-option p {
+            margin: 0;
+            font-weight: bold;
+        }
+        #sampleGenerations {
+            margin: 30px 0;
+            padding: 20px;
+            background-color: #f9f9f9;
+            border-radius: 8px;
+        }
+        .sample-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .sample-row img {
+            height: 150px;
+            object-fit: cover;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload Images</h1>
+
+    <div id="sampleGenerations">
+        <h2>Sample Generations</h2>
+        <div id="samplesContainer"></div>
+    </div>
+
+    <form id="uploadForm">
+        <div>
+            <label>Person Image:</label><br>
+            <input type="file" id="personImage" accept="image/*" required>
+        </div>
+        <br>
+        <div>
+            <label>Clothing Images:</label><br>
+            <input type="file" id="clothingImages" accept="image/*" multiple required>
+        </div>
+        <br>
+        <div>
+            <!-- User can select 1-3 settings by clicking on them -->
+            <label>Select Settings (1-3):</label>
+            <div id="settingsGrid" class="settings-grid"></div>
+        </div>
+        <br>
+        <button type="submit">Upload</button>
+    </form>
+
+    <div id="message"></div>
+    <div id="results"></div>
+
+    <script>
+        // Array to store selected setting names (max 3)
+        let selectedSettings = [];
+
+        // Fetch and display available settings on page load
+        async function loadSettings() {
+            try {
+                const response = await fetch('http://localhost:5000/settings');
+                const data = await response.json();
+
+                const grid = document.getElementById('settingsGrid');
+                grid.innerHTML = '';
+
+                // Create clickable div for each setting with image and label
+                data.settings.forEach(setting => {
+                    const option = document.createElement('div');
+                    option.className = 'setting-option';
+                    option.onclick = () => toggleSetting(setting.name, option);
+
+                    const img = document.createElement('img');
+                    img.src = setting.image_url;
+                    img.alt = setting.name;
+
+                    const label = document.createElement('p');
+                    label.textContent = setting.name;
+
+                    option.appendChild(img);
+                    option.appendChild(label);
+                    grid.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to load settings:', error);
+            }
+        }
+
+        // Toggle setting selection (multi-select up to 3)
+        function toggleSetting(settingName, element) {
+            const index = selectedSettings.indexOf(settingName);
+
+            if (index > -1) {
+                // Already selected, remove it
+                selectedSettings.splice(index, 1);
+                element.classList.remove('selected');
+            } else {
+                // Not selected, add it if under limit
+                if (selectedSettings.length >= 3) {
+                    alert('Maximum 3 settings allowed');
+                    return;
+                }
+                selectedSettings.push(settingName);
+                element.classList.add('selected');
+            }
+        }
+
+        // Handle form submission
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            // Validate at least one setting is selected
+            if (selectedSettings.length === 0) {
+                alert('Please select at least 1 setting');
+                return;
+            }
+
+            const formData = new FormData();
+            const personImage = document.getElementById('personImage').files[0];
+            const clothingImages = document.getElementById('clothingImages').files;
+
+            formData.append('personImage', personImage);
+            for (let i = 0; i < clothingImages.length; i++) {
+                formData.append('clothingImages', clothingImages[i]);
+            }
+            // Send selected settings as JSON array
+            formData.append('settings', JSON.stringify(selectedSettings));
+
+            document.getElementById('message').textContent = 'Processing...';
+            document.getElementById('results').innerHTML = '';
+
+            try {
+                const response = await fetch('http://localhost:5000/generate_request', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    document.getElementById('message').textContent = 'Processing complete! Run ID: ' + data.run_id;
+
+                    // Fetch run results from backend
+                    const runResponse = await fetch(`http://localhost:5000/runs/${data.run_id}`);
+                    const runData = await runResponse.json();
+
+                    if (runResponse.ok && runData.outputs) {
+                        const resultsDiv = document.getElementById('results');
+                        resultsDiv.innerHTML = '<h3>Results:</h3>';
+
+                        // Display each output image
+                        runData.outputs.forEach((output, i) => {
+                            if (output.url) {
+                                const img = document.createElement('img');
+                                img.src = output.url;
+                                img.style.maxWidth = '300px';
+                                img.style.margin = '10px';
+                                resultsDiv.appendChild(img);
+                            }
+                        });
+                    }
+                } else {
+                    document.getElementById('message').textContent = 'Error: ' + data.error;
+                }
+            } catch (error) {
+                document.getElementById('message').textContent = 'Error: ' + error.message;
+            }
+        });
+
+        async function loadSampleGenerations() {
+            try {
+                const response = await fetch('http://localhost:5000/sample_generations');
+                const samples = await response.json();
+
+                const container = document.getElementById('samplesContainer');
+                container.innerHTML = '';
+
+                samples.forEach(sample => {
+                    const row = document.createElement('div');
+                    row.className = 'sample-row';
+
+                    if (sample.inputs && sample.inputs.model) {
+                        const personImg = document.createElement('img');
+                        personImg.src = sample.inputs.model;
+                        personImg.alt = 'Person';
+                        row.appendChild(personImg);
+                    }
+
+                    if (sample.inputs && sample.inputs.clothing) {
+                        const clothingImg = document.createElement('img');
+                        clothingImg.src = sample.inputs.clothing;
+                        clothingImg.alt = 'Clothing';
+                        row.appendChild(clothingImg);
+                    }
+
+                    if (sample.outputs && Array.isArray(sample.outputs)) {
+                        sample.outputs.forEach(output => {
+                            if (output.url) {
+                                const outputImg = document.createElement('img');
+                                outputImg.src = output.url;
+                                outputImg.alt = 'Output';
+                                row.appendChild(outputImg);
+                            }
+                        });
+                    }
+
+                    container.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Failed to load sample generations:', error);
+            }
+        }
+
+        loadSettings();
+        loadSampleGenerations();
+    </script>
+</body>
+</html>
